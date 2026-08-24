@@ -302,11 +302,14 @@ def verify_design(X: np.ndarray, D: Design, atol: float = 1e-9) -> None:
     )
 
     # V(pi) >= (1 - gamma) V(pi^G) in the psd order, so mixing inflates the
-    # worst-case prediction variance by at most 1 / (1 - gamma).
+    # worst-case prediction variance by at most 1 / (1 - gamma).  At gamma = 1
+    # the design is uniform, that bound is vacuous, and the G-value can be as
+    # large as K rather than d -- so there is nothing to assert.
     gamma = D.info["gamma_mix"]
-    assert D.mixed_value <= d / (1.0 - gamma) * (1 + 1e-4), (
-        f"mixed design value {D.mixed_value} exceeds d / (1 - gamma) = {d / (1 - gamma)}"
-    )
+    if gamma < 1.0:
+        assert D.mixed_value <= d / (1.0 - gamma) * (1 + 1e-4), (
+            f"mixed design value {D.mixed_value} exceeds d / (1 - gamma) = {d / (1 - gamma)}"
+        )
 
 
 def verify_reparam(

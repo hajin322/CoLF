@@ -175,6 +175,12 @@ def round_robin(t: int, K: int) -> int:
     return t % K
 
 
+def confidence_radius(sigma: float, K: int, delta: float, scale: float = 1.0) -> float:
+    """sigma * sqrt(2 log(2K/delta)), the one constant both agents' widths are
+    built from, so a faster stopping time can't come from a looser budget."""
+    return scale * float(sigma) * float(np.sqrt(2.0 * np.log(2.0 * K / delta)))
+
+
 class _NullAgent(Agent):
     """Minimal concrete subclass, used only to exercise the base class."""
 
@@ -235,6 +241,12 @@ def _selftest() -> None:
         pass
     else:
         raise AssertionError("d < K is not being enforced")
+
+    r1 = confidence_radius(sigma=0.1, K=20, delta=0.05)
+    assert r1 > 0.0
+    assert confidence_radius(0.1, 20, 0.005) > r1, "smaller delta must widen the radius"
+    assert confidence_radius(0.1, 40, 0.05) > r1, "more arms must widen the radius"
+    assert np.isclose(confidence_radius(0.1, 20, 0.05, scale=2.0), 2.0 * r1)
 
     print("agents/base.py self-test passed")
 

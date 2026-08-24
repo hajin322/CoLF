@@ -112,13 +112,22 @@ class RunConfig:
     seed0: int = 20260823           # base seed; instance r uses seed0 + r
 
     coupling_p: float = 0.6         # pseudo-action coupling probability, in (1/2, 1)
-    lam_impute: float = 1e-2        # ridge penalty of the imputation estimator
+    lam_impute: float = 1e-2        # ridge penalty of the imputation estimator. Kept small:
+                                     # its shrinkage biases mu_check, which mu_hat inherits,
+                                     # and 1e-2 stops 2-3x sooner than 1.0 at equal accuracy.
     lam_dr: float = 1e-2            # ridge penalty of the DR estimator
 
-    beta_mode: str = "sharp"        # {"theory", "sharp", "calibrated"}
-    beta_scale: float = 1.0         # multiplier used when beta_mode == "calibrated"
+    beta_scale: float = 1.0         # inflation of the confidence width. beta covers only
+                                     # the noise reaching mu_hat through the DR correction;
+                                     # the imputation error (mu_check - mu*) leaking through
+                                     # (G - w xhat xhat^T) is not covered and is Section C's
+                                     # to supply. Raise this if the measured error rate
+                                     # exceeds delta.
 
-    check_every_sweeps: int = 1     # evaluate the stopping rule every m round-robin sweeps
+    check_every_rounds: int = 1     # evaluate the stopping rule every m rounds. 1 is the
+                                     # point of the DR step: V_N = N*G holds exactly at every
+                                     # matched round, so there is no reason to wait for a
+                                     # sweep boundary.
     ablation_T: int = 20_000        # horizon of the estimation-error experiment
     ablation_points: int = 40       # number of log-spaced checkpoints
 
@@ -127,8 +136,8 @@ class RunConfig:
             raise ValueError("delta must lie in (0, 1)")
         if not 0.5 < self.coupling_p < 1.0:
             raise ValueError("coupling_p must lie in (1/2, 1)")
-        if self.beta_mode not in {"theory", "sharp", "calibrated"}:
-            raise ValueError(f"unknown beta_mode: {self.beta_mode}")
+        if self.beta_scale <= 0.0:
+            raise ValueError("beta_scale must be positive")
 
 
 DEFAULT_SCENARIOS = (Scenario.FULL, Scenario.HALF, Scenario.UNIDENT)
