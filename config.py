@@ -2,34 +2,38 @@
 
 Three scenarios, following the discussion in the draft:
 
-    S1 (FULL)     du = 0.  Both algorithms are well specified.  Measures the
-                  price CoLF pays for robustness it does not need here.
-    S2 (HALF)     du = d.  The main claim: an observed-features-only stopping
-                  rule certifies the wrong arm at high nominal confidence.
-    S3 (UNIDENT)  du = d, and one pair of arms shares an observed feature
-                  vector while differing in the latent one.  This is the
-                  experimental counterpart of the `+K` term in Theorem 1:
-                  the latent offset of an arm is not identified by samples of
-                  the other arms.
+    S1 (FULL)      du = 0.  Everything that drives the reward is recorded, so
+                   both algorithms are well specified.  Measures the price CoLF
+                   pays for robustness it does not need here.
+    S2 (PARTIAL)   du = d.  Half the covariates go unrecorded.  Drawn without
+                   further conditioning, so the latent shifts reverse the
+                   ordering on some instances and not others.
+    S3 (REVERSED)  du = d, drawn conditional on the latent shifts actually
+                   reversing the ordering: the observed features alone rank a
+                   suboptimal arm strictly first.  This is the abstract's claim
+                   in isolation -- an observed-only rule cannot identify the
+                   best arm here however long it samples.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Optional
 
 
 class Scenario(str, Enum):
     FULL = "S1"      # fully observable
-    HALF = "S2"      # half observed, half latent
-    UNIDENT = "S3"   # half latent, with an observationally identical arm pair
+    PARTIAL = "S2"   # half observed, half latent
+    REVERSED = "S3"  # half latent, conditioned on the ordering being reversed
 
     @property
     def label(self) -> str:
+        """Two lines, because this is only ever used as a figure panel title."""
         return {
-            Scenario.FULL: "S1: fully observable",
-            Scenario.HALF: "S2: half latent",
-            Scenario.UNIDENT: "S3: unidentifiable pair",
+            Scenario.FULL: "fully observable",
+            Scenario.PARTIAL: "partially observable",
+            Scenario.REVERSED: "partially observable(reversed)",
         }[self]
 
 
@@ -47,26 +51,41 @@ class InstanceConfig:
 
     K: int = 20                     # number of arms
     d: int = 8                      # observed feature dimension (must be < K)
-    scenario: Scenario = Scenario.HALF
+    scenario: Scenario = Scenario.PARTIAL
 
-    latent_scale: float = 1.0       # kappa: L2 norm of each latent column u_a
     sigma: float = 0.1              # sub-Gaussian noise scale
     reward_bound: float = 1.0       # rescale theta so max_a |z_a^T theta| <= this
 
-    min_gap: float = 0.10           # reject instances with Delta_2 below this
-    max_gap: float = float("inf")   # optional upper cap on Delta_2
-    max_resample: int = 2000
+    # How much of the reward is hidden. None lets the scenario decide (0 for
+    # S1, d otherwise); set it to sweep du as a factor in its own right, which
+    # is the one knob the draft's claim is actually about.
+    latent_dim: Optional[int] = None
 
-    arm_noise: bool = False         # False: eta_t shared across arms (draft Eq. 2)
+    # Delta_2, the gap between the best and second-best arm, drives the sample
+    # complexity as 1/Delta_2^2. Without a floor, one nearly-tied draw dominates
+    # the mean T_delta and the comparison measures luck rather than the
+    # algorithms, so instances outside the band are redrawn.
+    min_gap: float = 0.10
+    max_gap: float = float("inf")
+    max_instances: int = 2000       # give up after this many redraws
 
     def __post_init__(self) -> None:
         if self.d >= self.K:
             raise ValueError(f"the setting requires d < K, got d={self.d}, K={self.K}")
         if self.min_gap <= 0:
             raise ValueError("min_gap must be positive")
+        if self.latent_dim is not None and self.latent_dim < 0:
+            raise ValueError("latent_dim must be non-negative")
+        if self.scenario is Scenario.REVERSED and self.du == 0:
+            raise ValueError(
+                "S3 conditions on the latent shifts reversing the ordering, "
+                "which is impossible with du = 0"
+            )
 
     @property
     def du(self) -> int:
+        if self.latent_dim is not None:
+            return self.latent_dim
         return 0 if self.scenario is Scenario.FULL else self.d
 
     @property
@@ -79,65 +98,29 @@ class InstanceConfig:
 
 
 # --------------------------------------------------------------------------- #
-# Design
-# --------------------------------------------------------------------------- #
-
-@dataclass(frozen=True)
-class DesignConfig:
-    """Parameters of the G-optimal design solver and the augmentation."""
-
-    gamma_mix: float = 0.5          # pi = (1 - g) pi^G + g * uniform;  draft uses 1/2
-    fw_max_iter: int = 20_000       # Frank-Wolfe / Fedorov-Wynn iterations
-    fw_tol: float = 1e-8            # stop when max_a ||x_a||^2_{V^-1} / d - 1 <= tol
-    prune: float = 1e-10            # zero out negligible pi^G weights, then renormalize
-    rank_rtol: float = 1e-10        # relative tolerance for the rank of Xbar
-    check: bool = True              # run the block-structure assertions on build
-
-    def __post_init__(self) -> None:
-        if not 0.0 < self.gamma_mix <= 1.0:
-            raise ValueError("gamma_mix must lie in (0, 1]")
-
-
-# --------------------------------------------------------------------------- #
 # Run
 # --------------------------------------------------------------------------- #
 
 @dataclass(frozen=True)
 class RunConfig:
-    """Parameters of a single benchmark / ablation sweep."""
+    """How to run a sweep.  Nothing here belongs to an algorithm: the
+    ridge penalties, the coupling probability, the confidence-width scale and
+    the stopping cadence are all constructor arguments of the agents that use
+    them."""
 
     delta: float = 0.05             # target confidence level
     n_reps: int = 50                # independent instances per scenario
     T_max: int = 200_000            # censoring horizon
     seed0: int = 20260823           # base seed; instance r uses seed0 + r
 
-    coupling_p: float = 0.6         # pseudo-action coupling probability, in (1/2, 1)
-    lam_impute: float = 1e-2        # ridge penalty of the imputation estimator. Kept small:
-                                     # its shrinkage biases mu_check, which mu_hat inherits,
-                                     # and 1e-2 stops 2-3x sooner than 1.0 at equal accuracy.
-    lam_dr: float = 1e-2            # ridge penalty of the DR estimator
-
-    beta_scale: float = 1.0         # inflation of the confidence width. beta covers only
-                                     # the noise reaching mu_hat through the DR correction;
-                                     # the imputation error (mu_check - mu*) leaking through
-                                     # (G - w xhat xhat^T) is not covered and is Section C's
-                                     # to supply. Raise this if the measured error rate
-                                     # exceeds delta.
-
-    check_every_rounds: int = 1     # evaluate the stopping rule every m rounds. 1 is the
-                                     # point of the DR step: V_N = N*G holds exactly at every
-                                     # matched round, so there is no reason to wait for a
-                                     # sweep boundary.
     ablation_T: int = 20_000        # horizon of the estimation-error experiment
     ablation_points: int = 40       # number of log-spaced checkpoints
 
     def __post_init__(self) -> None:
         if not 0.0 < self.delta < 1.0:
             raise ValueError("delta must lie in (0, 1)")
-        if not 0.5 < self.coupling_p < 1.0:
-            raise ValueError("coupling_p must lie in (1/2, 1)")
-        if self.beta_scale <= 0.0:
-            raise ValueError("beta_scale must be positive")
+        if self.n_reps <= 0 or self.T_max <= 0:
+            raise ValueError("n_reps and T_max must be positive")
 
 
-DEFAULT_SCENARIOS = (Scenario.FULL, Scenario.HALF, Scenario.UNIDENT)
+DEFAULT_SCENARIOS = (Scenario.FULL, Scenario.PARTIAL, Scenario.REVERSED)

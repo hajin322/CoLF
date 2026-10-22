@@ -42,12 +42,9 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import TYPE_CHECKING, Optional
+from typing import Optional
 
 import numpy as np
-
-if TYPE_CHECKING:                      # avoids a hard dependency on the layout
-    from design import Design
 
 
 class StopReason(str, Enum):
@@ -153,11 +150,10 @@ class Agent(ABC):
 def argmax_random_tie(v: np.ndarray, rng: np.random.Generator, tol: float = 1e-12) -> int:
     """Argmax with ties broken uniformly at random.
 
-    Deterministic tie-breaking would let an observed-only agent look either
-    perfect or hopeless in scenario S3 purely through index order, since the
-    twin arms there receive exactly equal scores.  Breaking at random makes the
-    coin flip explicit and matches the accuracy ceiling reported by
-    `Instance.oracle`.
+    When two arms score exactly equal, deterministic tie-breaking would let an
+    agent look either lucky or hopeless purely through arm labelling.  Breaking
+    at random makes the coin flip explicit and matches the 1/|tie set| accuracy
+    ceiling reported by `Instance.oracle`.
     """
     v = np.asarray(v, dtype=float)
     hit = np.flatnonzero(v >= v.max() - tol * max(1.0, float(np.abs(v).max())))

@@ -87,7 +87,7 @@ def run_single(
 # --------------------------------------------------------------------------- #
 
 def _selftest() -> None:
-    from config import DesignConfig, InstanceConfig, Scenario
+    from config import InstanceConfig, Scenario
     from env import make_instance
 
     class _RoundRobinAgent(Agent):
@@ -118,9 +118,8 @@ def _selftest() -> None:
         def recommend(self):
             return int(np.argmax(self.predicted_means()))
 
-    cfg = InstanceConfig(K=10, d=4, scenario=Scenario.HALF, sigma=0.1, min_gap=0.10)
-    dcfg = DesignConfig()
-    inst = make_instance(cfg, seed=1, dcfg=dcfg)
+    cfg = InstanceConfig(K=10, d=4, scenario=Scenario.PARTIAL, sigma=0.1, min_gap=0.10)
+    inst = make_instance(cfg, seed=1)
     rng = np.random.default_rng(0)
 
     # stops on its own before T_max: reason is STOPPED, T_delta == horizon
