@@ -159,13 +159,15 @@ def plot_benchmark(
     out_path: Optional[str] = None,
     titles: Optional[dict] = None,
 ):
-    """Top row: sample complexity per agent, shared y so the panels compare.
-    Bottom row: how often each agent named a suboptimal arm, or never stopped.
+    """One panel per scenario: how often each agent named a suboptimal arm, or
+    never stopped.
 
-    Neither outliers nor the mean are drawn.  Censored runs sit at T_max, so
-    they would stretch a log axis over four decades and would drag the mean
-    above the box while not being a mean at all -- a censored run's true
-    stopping time is unknown.  The bottom row counts them instead."""
+    The sample-complexity row this figure used to carry is gone; the stopping
+    times are reported as a median column in the benchmark table instead, which
+    is where the K-versus-d reading of them belongs. What is on trial here is
+    soundness, and a speed panel beside it invites the reading that the two
+    trade off -- they do not, since a censored run has no stopping time to put
+    on the axis and a fast wrong answer is not a cheap one."""
     import matplotlib.pyplot as plt
 
     scenarios = list(scenarios) if scenarios else sorted({r["scenario"] for r in records})
@@ -173,8 +175,8 @@ def plot_benchmark(
     styles = {ag: _agent_style(ag, i) for i, ag in enumerate(agents)}
 
     fig, axes = plt.subplots(
-        2, len(scenarios), figsize=(3.6 * len(scenarios), 6.0), squeeze=False,
-        sharey="row", gridspec_kw={"height_ratios": [1.25, 1.0]},
+        1, len(scenarios), figsize=(3.6 * len(scenarios), 3.2), squeeze=False,
+        sharey=True,
     )
 
     rates = [
@@ -185,22 +187,8 @@ def plot_benchmark(
 
     for col, scen in enumerate(scenarios):
         rows = [r for r in records if r["scenario"] == scen]
-        ax_t, ax_e = axes[0, col], axes[1, col]
-
-        box = ax_t.boxplot(
-            [[r["T_delta"] for r in rows if r["agent"] == ag] for ag in agents],
-            tick_labels=[styles[ag][1].split(" (")[0] for ag in agents],
-            showmeans=False, showfliers=False, patch_artist=True, widths=0.55,
-            medianprops=dict(color="black", lw=1.4),
-        )
-        for patch, ag in zip(box["boxes"], agents):
-            patch.set_facecolor(styles[ag][0])
-            patch.set_alpha(0.35)
-        ax_t.set_yscale("log")
-        ax_t.set_title(titles.get(scen, scen) if titles else scen, fontsize=11)
-        _clean_log(ax_t, "y")
-        if col == 0:
-            ax_t.set_ylabel("sample complexity")
+        ax_e = axes[0, col]
+        ax_e.set_title(titles.get(scen, scen) if titles else scen, fontsize=11)
 
         err, cens = zip(*[_rate_pair([r for r in rows if r["agent"] == ag])
                           for ag in agents])
@@ -502,7 +490,7 @@ def _selftest() -> None:
     assert summary[("S3", "gopt")]["censor_rate"] > 0.0
 
     fig1 = plot_benchmark(bench, delta=0.05, out_path=os.path.join(scratch, "benchmark_selftest.png"))
-    assert fig1.axes and len(fig1.axes) == 6
+    assert fig1.axes and len(fig1.axes) == 3, "one rate panel per scenario"
     assert os.path.getsize(os.path.join(scratch, "benchmark_selftest.png")) > 0
 
     # --- ablation: colf's offset error and eps decay, gopt's eps plateaus ---
