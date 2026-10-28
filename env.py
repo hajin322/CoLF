@@ -15,7 +15,7 @@ whatever the other arms did, so runs remain comparable across agents.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional, Tuple
+from typing import Optional
 
 import numpy as np
 
@@ -91,46 +91,6 @@ class Instance:
         """
         eta = float(self._noise_rng[a].standard_normal()) * self.cfg.sigma
         return float(self.means[a]) + eta
-
-    # --------------------------------------------------------------- oracles --
-
-    def oracle(self) -> dict:
-        """How much damage the unrecorded covariates do, for evaluation only.
-
-        The reward splits into a recorded and an unrecorded contribution,
-
-            m_a = x_a^T theta_o  +  u_a^T theta_u
-                  [ recorded  ]     [ the shift ]
-
-        and the draft's claim is that the shift differs across arms and can
-        therefore reverse their ordering.  Both halves are read straight off the
-        true parameters, which is why nothing here mentions a design, a
-        projection, or any particular learner: what the recorded covariates do
-        and do not determine is a property of the instance.
-        """
-        recorded = self.X.T @ self.theta_o
-        shift = self.U.T @ self.theta_u if self.U.size else np.zeros(self.K)
-        obs_best = int(np.argmax(recorded))
-        return {
-            "obs_best": obs_best,                 # arm the recorded part favours
-            "reversal": obs_best != self.a_star,  # the shift changes the winner
-            "obs_gap": float(recorded.max() - recorded[self.a_star]),
-            "shift_spread": float(shift.max() - shift.min()),
-            "shift_max": float(np.abs(shift).max()),
-        }
-
-    def summary(self) -> dict:
-        return {
-            "scenario": self.cfg.scenario.value,
-            "seed": self.seed,
-            "K": self.K,
-            "d": self.d,
-            "du": self.cfg.du,
-            "a_star": self.a_star,
-            "gap_min": self.gap_min,
-            "gap_max": float(self.gaps.max()),
-            "mean_max": float(self.means.max()),
-        }
 
 
 # --------------------------------------------------------------------------- #
@@ -222,27 +182,21 @@ def _selftest() -> None:
         cfg = InstanceConfig(K=20, d=8, scenario=scenario, sigma=0.1, min_gap=0.10)
         insts = make_batch(cfg, n_reps=50, seed0=20260823)
 
-        rev, gaps, obsgap, shifts = [], [], [], []
+        rev, gaps = [], []
         for ins in insts:
-            o = ins.oracle()
-            rev.append(o["reversal"])
+            # the recorded covariates' own favourite, read off theta_o
+            reversal = int(np.argmax(ins.X.T @ ins.theta_o)) != ins.a_star
+            rev.append(reversal)
             gaps.append(ins.gap_min)
-            obsgap.append(o["obs_gap"])
-            shifts.append(o["shift_spread"])
             if scenario is Scenario.FULL:
-                assert not o["reversal"] and o["obs_gap"] == 0.0, (
+                assert not reversal, (
                     "S1: nothing is hidden, so the observed ranking must be right"
                 )
             if scenario is Scenario.REVERSED:
-                assert o["reversal"] and o["obs_gap"] > 0.0, (
-                    "S3 conditioning failed: the ordering is not reversed"
-                )
+                assert reversal, "S3 conditioning failed: the ordering is not reversed"
 
-        print(
-            f"{scenario.value} | reversal {np.mean(rev):5.1%} | "
-            f"shift spread {np.mean(shifts):.4f} | "
-            f"Delta_2 {np.mean(gaps):.4f} | obs-gap {np.mean(obsgap):.4f}"
-        )
+        print(f"{scenario.value} | reversal {np.mean(rev):5.1%} | "
+              f"median Delta_2 {np.median(gaps):.4f}")
 
     # each arm has its own stream: the n-th pull of a given arm is reproducible,
     # and different arms get independent draws

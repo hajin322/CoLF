@@ -27,7 +27,8 @@ the linearity of the reward.
    latent dimension is never estimated.
 3. **Doubly robust estimation.** A DR pseudo-reward lets every arm contribute to
    the information matrix in every round, so one confidence width serves all
-   arms and the imputation error cancels over a round-robin sweep.
+   arms. The pseudo-action is matched to the pulled arm with probability
+   `p = 0.6`, inside the range `(1/2, 1)` that Theorems 3 and 4 assume.
 4. **Two-phase elimination.** Arms are eliminated against that width until at
    most `d` survive, after which CoLF switches to successive elimination on
    per-arm empirical means, which are unbiased regardless of the latent features.
@@ -46,31 +47,30 @@ No other third-party dependency; `matplotlib` is needed only for the figures.
 ## Usage
 
 ```bash
-python run.py                # self-test, small end-to-end run (~5 s)
-python run.py benchmark      # experiment 1: error rate and sample complexity
-python run.py ablation       # experiment 2: estimation-error diagnostics
-python run.py sweep          # experiment 3: one factor at a time
+python run.py                # self-test, small end-to-end run
+python run.py benchmark      # Figure 1 and Table 1
+python run.py ablation       # Figure 2 and the ablation table
+python run.py sweep          # Tables 2 and 3
 ```
 
-Every run writes into `results/`:
+With no flags each command reproduces the paper's setting, and writes only the
+paper's figures and tables into `results/`:
 
-| command | output |
-| --- | --- |
-| `benchmark` | `benchmark.csv`, `benchmark.png` |
-| `ablation` | `ablation.csv`, `ablation.png` |
-| `sweep` | `sweep.csv`, `sweep_{du,delta,min_gap,K}.csv`, `sweep_summary.csv`, `sweep.png` |
+| command | output | in the paper |
+| --- | --- | --- |
+| `benchmark` | `benchmark.png`, `table1_benchmark.csv` | Figure 1, Table 1 |
+| `ablation` | `ablation.png`, `table_ablation.csv` | Figure 2, the ablation table |
+| `sweep` | `table2_du.csv`, `table3_delta.csv` | Table 2, Table 3 |
 
-Common options (`python run.py <command> -h` for the full list):
+Common options (`python run.py <command> -h` for the full list, including each
+command's instance counts and levels):
 
 ```
 --K --d --sigma --min-gap     the instance
 --delta --t-max --seed0       the run
---p --ipw --beta-scale        CoLF's own knobs
---n-reps --out-dir
+--p                           CoLF's matching probability
+--out-dir
 ```
-
-`sweep` varies one factor at a time over `du`, `delta`, `min_gap` and `K`,
-holding everything else fixed and reusing the same seeds at every level.
 
 Every module is also runnable on its own and then executes its own regression
 test, for example `python agents/colf.py` or `python env.py`.
@@ -78,20 +78,21 @@ test, for example `python agents/colf.py` or `python env.py`.
 ## Layout
 
 ```
-run.py            CLI: config -> instances -> agents -> experiment -> plots
+run.py            CLI: one command per group of the paper's figures and tables
 config.py         InstanceConfig / RunConfig and the three scenarios
 env.py            the reward-generating environment; agents only ever see X
-plots.py          figures for the benchmark, the ablation and the sweeps
+plots.py          Figures 1 and 2
 agents/
   base.py         the interface every agent implements
-  colf.py         CoLF: mixed design, orthogonal augmentation, DR estimator
+  colf.py         CoLF, Algorithm 1: mixed design, orthogonal augmentation,
+                  DR estimator, two-phase elimination
   gopt.py         observed-features-only G-allocation elimination baseline
 expt/
   runner.py       one (instance, agent) execution loop
-  benchmark.py    experiment 1
-  ablation.py     experiment 2
-  sweep.py        experiment 3
-results/          csv and png written by the commands above
+  benchmark.py    Figure 1, Table 1
+  ablation.py     Figure 2, the ablation table
+  sweep.py        Tables 2 and 3
+results/          the paper's figures and tables, written by the commands above
 ```
 
 The information barrier of the setting is enforced by the code rather than by

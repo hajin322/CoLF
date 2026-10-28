@@ -17,7 +17,7 @@ Three scenarios, following the discussion in the draft:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
 
@@ -88,14 +88,6 @@ class InstanceConfig:
             return self.latent_dim
         return 0 if self.scenario is Scenario.FULL else self.d
 
-    @property
-    def dz(self) -> int:
-        return self.d + self.du
-
-    @property
-    def tag(self) -> str:
-        return f"{self.scenario.value}_K{self.K}_d{self.d}"
-
 
 # --------------------------------------------------------------------------- #
 # Run
@@ -103,18 +95,16 @@ class InstanceConfig:
 
 @dataclass(frozen=True)
 class RunConfig:
-    """How to run a sweep.  Nothing here belongs to an algorithm: the
-    ridge penalties, the coupling probability, the confidence-width scale and
-    the stopping cadence are all constructor arguments of the agents that use
-    them."""
+    """How to run an experiment.  Nothing here belongs to an algorithm: CoLF's
+    matching probability p is a constructor argument of the agent."""
 
     delta: float = 0.05             # target confidence level
     n_reps: int = 50                # independent instances per scenario
     T_max: int = 200_000            # censoring horizon
     seed0: int = 20260823           # base seed; instance r uses seed0 + r
 
-    ablation_T: int = 20_000        # horizon of the estimation-error experiment
-    ablation_points: int = 40       # number of log-spaced checkpoints
+    ablation_T: int = 20_000        # horizon of Figure 2
+    ablation_points: int = 40       # its number of log-spaced checkpoints
 
     def __post_init__(self) -> None:
         if not 0.0 < self.delta < 1.0:

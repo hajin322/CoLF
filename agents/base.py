@@ -22,20 +22,11 @@ an intervening `update` should return the same arm.
 
 Evaluation hooks
 ----------------
-Both experiments need quantities that are defined differently inside each
-agent, so the base class fixes a common vocabulary:
-
     predicted_means()     estimate of E[y_a] for every arm, on the original
-                          reward scale.  This is what the ablation compares
-                          against the true means, and it is the one quantity
-                          both an augmented and an observed-only agent can
-                          produce.
-    components()          the estimate split into its parallel and orthogonal
-                          halves; "perp" is None for agents without an
-                          augmented block.
-    confidence_width()    the current half-width the stopping rule uses, so the
-                          ablation can overlay the realised error on the bound
-                          that is supposed to dominate it.
+                          reward scale, comparable across agents and against
+                          `instance.means`.  Figure 2 plots its error.
+    confidence_width()    the current half-width the elimination rule uses, so
+                          Figure 2 can divide the realised error by it.
 """
 
 from __future__ import annotations
@@ -105,22 +96,9 @@ class Agent(ABC):
 
     # ------------------------------------------------------------- optional --
 
-    def components(self) -> dict:
-        """Parameter estimate split by block.  Override in augmented agents."""
-        return {"par": None, "perp": None}
-
     def confidence_width(self) -> Optional[float]:
-        """Current half-width used by the stopping rule, if the agent has one."""
+        """Current half-width used by the elimination rule, if the agent has one."""
         return None
-
-    def trace(self) -> dict:
-        """Scalar diagnostics recorded at ablation checkpoints."""
-        return {
-            "t": self.t,
-            "n_effective": int(self.n_pulls.sum()),
-            "min_pulls": int(self.n_pulls.min()),
-            "width": self.confidence_width(),
-        }
 
     # ------------------------------------------------------------ mechanics --
 
@@ -152,8 +130,7 @@ def argmax_random_tie(v: np.ndarray, rng: np.random.Generator, tol: float = 1e-1
 
     When two arms score exactly equal, deterministic tie-breaking would let an
     agent look either lucky or hopeless purely through arm labelling.  Breaking
-    at random makes the coin flip explicit and matches the 1/|tie set| accuracy
-    ceiling reported by `Instance.oracle`.
+    at random makes the coin flip explicit.
     """
     v = np.asarray(v, dtype=float)
     hit = np.flatnonzero(v >= v.max() - tol * max(1.0, float(np.abs(v).max())))
@@ -223,7 +200,6 @@ def _selftest() -> None:
     assert ag.t == 16 and ag.stopped and ag.reason is StopReason.STOPPED
     assert np.allclose(ag.predicted_means(), np.arange(8.0))
     assert ag.recommend() == 7
-    assert ag.trace()["min_pulls"] == 2
 
     # ties are broken uniformly, not by index order
     counts = np.zeros(3)

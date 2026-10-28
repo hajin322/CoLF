@@ -1,27 +1,16 @@
-"""CLI entry point: config -> instances -> agents -> experiment -> plots.
+"""CLI entry point: every figure and table of the paper, and nothing else.
 
-    python run.py benchmark   experiment 1: sample complexity + error rate
-    python run.py ablation    experiment 2: estimation-error diagnostics
-    python run.py sweep       experiment 3: one factor at a time
-    python run.py             self-test (small end-to-end run, ~5s)
+    python run.py benchmark   Figure 1, Table 1     -> benchmark.png, table1_benchmark.csv
+    python run.py ablation    Figure 2, ablation    -> ablation.png, table_ablation.csv
+    python run.py sweep       Tables 2 and 3        -> table2_du.csv, table3_delta.csv
+    python run.py             self-test (small end-to-end run)
 
-Agent imports are deferred into the command functions so that `-h` and the
-self-test's argument checks stay cheap. The seams:
-
-    agents.gopt.GOptAgent(X, delta, sigma, rng=None)
-    agents.colf.CoLFAgent(X, delta, sigma, rng=None, **algorithm_knobs)
-    expt.benchmark.run_benchmark(instance_cfgs, agent_factories, run_cfg)
-        -> list[dict]  (schema: plots.summarize_benchmark / plots.plot_benchmark)
-    expt.ablation.run_ablation(instance_cfg, agent_factories, run_cfg)
-        -> list[dict]  (schema: plots.plot_ablation)
-    expt.sweep.run_sweep(factor, values, base_cfg, agent_factories, run_cfg)
-        -> list[dict]  (schema: expt.sweep.summarize_sweep -> plots.plot_sweep)
+With no flags each command reproduces the paper's setting (PAPER below);
+instance and run defaults are read from InstanceConfig / RunConfig and CoLF's
+from its constructor, never retyped, so the CLI cannot drift from them.
+Agent imports are deferred into the commands so that `-h` stays cheap.
 
 `agent_factories` is {name: Callable[[X, delta, sigma, rng], Agent]}.
-
-Every default is read from InstanceConfig / RunConfig rather than written out
-here, so the CLI cannot drift from the dataclasses; _selftest pins that.
-Algorithm knobs belong to the agents, so they are wired in _agent_factories.
 """
 
 from __future__ import annotations
@@ -34,156 +23,127 @@ from typing import Sequence
 from config import DEFAULT_SCENARIOS, InstanceConfig, RunConfig, Scenario
 import plots
 
-SCENARIO_BY_NAME = {s.value: s for s in Scenario}
-
-
-def _agent_factories(args: argparse.Namespace) -> dict:
-    """Algorithm knobs live on the agents, so they are wired in here rather
-    than carried around inside RunConfig."""
-    from agents.colf import CoLFAgent
-    from agents.gopt import GOptAgent
-
-    f = {
-        "gopt": lambda X, delta, sigma, rng: GOptAgent(X, delta, sigma, rng),
-        "colf": lambda X, delta, sigma, rng: CoLFAgent(
-            X, delta, sigma, rng, beta_scale=args.beta_scale, ipw=args.ipw,
-            p=args.p),
-    }
-    return f
-
-
-def _run_config(args: argparse.Namespace) -> RunConfig:
-    kwargs = dict(delta=args.delta, n_reps=args.n_reps, T_max=args.t_max,
-                  seed0=args.seed0)
-    if hasattr(args, "ablation_T"):
-        kwargs["ablation_T"] = args.ablation_T
-        kwargs["ablation_points"] = args.ablation_points
-    return RunConfig(**kwargs)
-
-
-def _instance_configs(args: argparse.Namespace) -> Sequence[InstanceConfig]:
-    names = args.scenarios or [s.value for s in DEFAULT_SCENARIOS]
-    base = dict(K=args.K, d=args.d, sigma=args.sigma, min_gap=args.min_gap)
-    return [InstanceConfig(scenario=SCENARIO_BY_NAME[name], **base) for name in names]
-
-
-def _write_csv(records: Sequence[dict], path: Path) -> None:
-    if not records:
-        return
-    with open(path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=list(records[0].keys()))
-        writer.writeheader()
-        writer.writerows(records)
-
-
-def _print_summary(summary: dict) -> None:
-    print(f"{'scenario':<10}{'agent':<8}{'n':>5}{'T_median':>10}"
-          f"{'error':>8}{'censor':>8}{'err|rev':>9}{'err|proj-rev':>14}")
-    for (scen, agent), s in sorted(summary.items()):
-        print(f"{scen:<10}{agent:<8}{s['n']:>5}{s['T_median']:>10.1f}"
-              f"{s['error_rate']:>8.3f}{s['censor_rate']:>8.3f}"
-              f"{s['error_rate_given_reversal']:>9.3f}"
-              f"{s['error_rate_given_proj_reversal']:>14.3f}")
-
-
-def cmd_benchmark(args: argparse.Namespace) -> None:
-    from expt.benchmark import run_benchmark
-
-    run_cfg = _run_config(args)
-    instance_cfgs = _instance_configs(args)
-    records = run_benchmark(instance_cfgs, _agent_factories(args), run_cfg)
-
-    out_dir = Path(args.out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    _write_csv(records, out_dir / "benchmark.csv")
-    _print_summary(plots.summarize_benchmark(records))
-    plots.plot_benchmark(
-        records, delta=run_cfg.delta,
-        titles={s.value: s.label for s in Scenario},
-        out_path=out_dir / "benchmark.png",
-    )
-
-
-def cmd_ablation(args: argparse.Namespace) -> None:
-    from expt.ablation import run_ablation
-
-    run_cfg = _run_config(args)
-    scenario = SCENARIO_BY_NAME[args.ablation_scenario]
-    instance_cfg = InstanceConfig(
-        K=args.K, d=args.d, scenario=scenario, sigma=args.sigma,
-        min_gap=args.min_gap,
-    )
-    from agents.colf import CoLFAgent
-    from agents.gopt import GOptAgent
-    factories = _agent_factories(args)
-    # the ablation ladder: remove one thing at a time, and a ceiling
-    factories["colf_noaug"] = lambda X, delta, sigma, rng: CoLFAgent(
-        X, delta, sigma, rng, beta_scale=args.beta_scale, ipw=args.ipw,
-        p=args.p, augment=False)
-    factories["oracle"] = lambda X, delta, sigma, rng: GOptAgent(X, delta, sigma, rng)
-    records = run_ablation(instance_cfg, factories, run_cfg)
-
-    out_dir = Path(args.out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    _write_csv(records, out_dir / "ablation.csv")
-
-    print(f"{'t':>8}  {'agent':<6}{'n':>5}{'eps_base':>11}{'beta':>11}"
-          f"{'beta/eps':>10}{'error':>8}{'sigma_perp':>12}")
-    for r in plots.summarize_ablation(records):
-        print(f"{r['t']:>8}  {r['agent']:<6}{r['n']:>5}{r['eps_base']:>11.5f}"
-              f"{r['beta']:>11.5f}{r['ratio']:>10.2f}{r['error']:>8.3f}"
-              f"{r['sigma_perp']:>12.5f}")
-
-    plots.plot_ablation(records, out_path=out_dir / "ablation.png")
-
-
-# factor -> the levels swept when `run.py sweep` is called without --values.
-# Chosen so each of the draft's claims gets its own curve; see expt/sweep.py.
-SWEEP_LEVELS = {
-    "du": [0, 1, 2, 4, 8, 16],
-    "delta": [0.2, 0.1, 0.05, 0.01],
-    "min_gap": [0.10, 0.20, 0.30, 0.40, 0.50],
-    "K": [10, 20, 30, 40, 50],
+# The paper's instance counts, scenarios and levels, per figure and table.
+PAPER = {
+    "benchmark_reps": 200,
+    "figure2_reps": 100, "figure2_scenario": Scenario.PARTIAL,
+    "ablation_reps": 150, "ablation_scenario": Scenario.REVERSED,
+    "du_reps": 150, "du_scenario": Scenario.PARTIAL, "du_levels": [0, 1, 2, 4, 8, 16],
+    "delta_reps": 200, "delta_scenario": Scenario.REVERSED,
+    "delta_levels": [0.2, 0.1, 0.05, 0.01, 0.005, 0.001],
 }
 
 
-def cmd_sweep(args: argparse.Namespace) -> None:
-    from expt.sweep import run_sweep, summarize_sweep
+def _gopt():
+    from agents.gopt import GOptAgent
+    return lambda X, delta, sigma, rng: GOptAgent(X, delta, sigma, rng)
 
-    run_cfg = _run_config(args)
-    base = InstanceConfig(K=args.K, d=args.d, scenario=SCENARIO_BY_NAME[args.scenario],
-                          sigma=args.sigma, min_gap=args.min_gap)
-    out_dir = Path(args.out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
 
-    summary, records = [], []
-    for factor in args.factors:
-        values = args.values if args.values else SWEEP_LEVELS[factor]
-        values = [type(SWEEP_LEVELS[factor][0])(v) for v in values]
-        rows = run_sweep(factor, values, base, _agent_factories(args), run_cfg)
-        records.extend(rows)
-        summary.extend(summarize_sweep(rows))
+def _colf(args, **kw):
+    from agents.colf import CoLFAgent
+    return lambda X, delta, sigma, rng: CoLFAgent(X, delta, sigma, rng, p=args.p, **kw)
 
-    _write_csv(records, out_dir / "sweep.csv")
-    print(f"{'factor':<9}{'value':>8}{'agent':>7}{'n':>5}{'error':>8}{'censor':>8}"
-          f"{'T_med':>9}{'Delta_2':>9}{'proj-rev':>10}")
-    for r in summary:
-        print(f"{r['factor']:<9}{r['value']:>8}{r['agent']:>7}{r['n']:>5}"
-              f"{r['error_rate']:>8.3f}{r['censor_rate']:>8.3f}{r['T_median']:>9.0f}"
-              f"{r['Delta_2']:>9.4f}{r['proj_reversal_rate']:>10.2f}")
 
-    plots.plot_sweep(summary, delta=run_cfg.delta, K=args.K,
-                     out_path=out_dir / "sweep.png")
+def _instance_config(args, scenario: Scenario) -> InstanceConfig:
+    return InstanceConfig(K=args.K, d=args.d, scenario=scenario, sigma=args.sigma,
+                          min_gap=args.min_gap)
 
+
+def _run_config(args, n_reps: int, **kw) -> RunConfig:
+    return RunConfig(delta=args.delta, n_reps=n_reps, T_max=args.t_max,
+                     seed0=args.seed0, **kw)
+
+
+def _write_table(rows: Sequence[dict], path: Path) -> None:
+    """Write the rows to CSV and echo them, so a run shows what it wrote."""
+    with open(path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"\n{path}")
+    print("  ".join(f"{k:>14}" for k in rows[0]))
+    for r in rows:
+        print("  ".join(f"{v:>14.4g}" if isinstance(v, float) else f"{v!s:>14}"
+                        for v in r.values()))
+
+
+def _out_dir(args) -> Path:
+    out = Path(args.out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# commands
+# --------------------------------------------------------------------------- #
+
+def cmd_benchmark(args) -> None:
+    from expt.benchmark import run_benchmark, table
+
+    out = _out_dir(args)
+    records = run_benchmark(
+        [_instance_config(args, s) for s in DEFAULT_SCENARIOS],
+        {"gopt": _gopt(), "colf": _colf(args)},
+        _run_config(args, args.n_reps),
+    )
+    plots.plot_benchmark(records, delta=args.delta,
+                         titles={s.value: s.label for s in Scenario},
+                         out_path=out / "benchmark.png")
+    _write_table(table(records), out / "table1_benchmark.csv")
+
+
+def cmd_ablation(args) -> None:
+    from expt.ablation import run_ablation, run_stopping_ablation, table
+
+    def ladder(eliminate):
+        return {"gopt": _gopt(),
+                "colf": _colf(args, eliminate=eliminate),
+                "colf_noaug": _colf(args, eliminate=eliminate, augment=False),
+                "oracle": _gopt()}
+
+    out = _out_dir(args)
+    # Figure 2 compares estimators on one round-robin schedule, so CoLF's
+    # phase-1 estimator is kept running with no elimination; the table runs
+    # every agent to its own stopping rule.
+    records = run_ablation(
+        _instance_config(args, PAPER["figure2_scenario"]), ladder(eliminate=False),
+        _run_config(args, args.figure_reps, ablation_T=args.ablation_T,
+                    ablation_points=args.ablation_points),
+    )
+    plots.plot_ablation(records, out_path=out / "ablation.png")
+
+    rows = run_stopping_ablation(
+        _instance_config(args, PAPER["ablation_scenario"]), ladder(eliminate=True),
+        _run_config(args, args.table_reps),
+    )
+    _write_table(table(rows), out / "table_ablation.csv")
+
+
+def cmd_sweep(args) -> None:
+    from expt.sweep import run_sweep, table_delta, table_du
+
+    out = _out_dir(args)
+    factories = {"gopt": _gopt(), "colf": _colf(args)}
+    rows = run_sweep("du", args.du_levels,
+                     _instance_config(args, PAPER["du_scenario"]), factories,
+                     _run_config(args, args.du_reps))
+    _write_table(table_du(rows), out / "table2_du.csv")
+    rows = run_sweep("delta", args.delta_levels,
+                     _instance_config(args, PAPER["delta_scenario"]), factories,
+                     _run_config(args, args.delta_reps))
+    _write_table(table_delta(rows), out / "table3_delta.csv")
+
+
+# --------------------------------------------------------------------------- #
+# parser
+# --------------------------------------------------------------------------- #
 
 def _add_common_args(sp: argparse.ArgumentParser) -> None:
-    # Defaults are read from the dataclasses, never retyped: a hardcoded CLI
-    # default once shadowed a config field and silently reverted every run.
-    ic, rc = InstanceConfig(), RunConfig()
-    # CoLF's constructor defaults, read the same way rather than retyped
     import inspect
     from agents.colf import CoLFAgent
-    cd = {k: v.default for k, v in inspect.signature(CoLFAgent).parameters.items()}
+
+    ic, rc = InstanceConfig(), RunConfig()
+    p_default = inspect.signature(CoLFAgent).parameters["p"].default
     sp.add_argument("--K", type=int, default=ic.K)
     sp.add_argument("--d", type=int, default=ic.d)
     sp.add_argument("--sigma", type=float, default=ic.sigma)
@@ -191,51 +151,38 @@ def _add_common_args(sp: argparse.ArgumentParser) -> None:
     sp.add_argument("--delta", type=float, default=rc.delta)
     sp.add_argument("--t-max", type=int, default=rc.T_max)
     sp.add_argument("--seed0", type=int, default=rc.seed0)
-    # CoLF's own knobs, not run settings.
-    sp.add_argument("--beta-scale", type=float, default=cd["beta_scale"])
-    # w = 1/p is the draft's Eq. (12)-(13); w = K is the value at which the
-    # imputation drops out of mu_hat entirely. See agents/colf.py.
-    sp.add_argument("--ipw", choices=("paper", "round_robin"), default=cd["ipw"])
-    sp.add_argument("--p", type=float, default=cd["p"],
-                    help="pseudo-action coupling probability, Eq. (12)")
+    sp.add_argument("--p", type=float, default=p_default,
+                    help="CoLF's pseudo-action matching probability, Eq. (7)-(10)")
     sp.add_argument("--out-dir", default="results")
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="CoLF experiments (BAI under partial observability)")
-    sub = p.add_subparsers(dest="cmd", required=True)
-
     rc = RunConfig()
+    parser = argparse.ArgumentParser(description="CoLF: the paper's figures and tables")
+    sub = parser.add_subparsers(dest="cmd", required=True)
 
-    b = sub.add_parser("benchmark", help="experiment 1: sample complexity + error rate")
-    b.add_argument("--scenarios", nargs="+", choices=list(SCENARIO_BY_NAME), default=None)
-    b.add_argument("--n-reps", type=int, default=rc.n_reps)
+    b = sub.add_parser("benchmark", help="Figure 1 and Table 1")
+    b.add_argument("--n-reps", type=int, default=PAPER["benchmark_reps"])
     _add_common_args(b)
     b.set_defaults(func=cmd_benchmark)
 
-    a = sub.add_parser("ablation", help="experiment 2: estimation-error diagnostics")
-    a.add_argument("--ablation-scenario", choices=list(SCENARIO_BY_NAME), default=Scenario.PARTIAL.value)
-    a.add_argument("--n-reps", type=int, default=rc.n_reps)
+    a = sub.add_parser("ablation", help="Figure 2 and the ablation table")
+    a.add_argument("--figure-reps", type=int, default=PAPER["figure2_reps"])
+    a.add_argument("--table-reps", type=int, default=PAPER["ablation_reps"])
     a.add_argument("--ablation-T", type=int, default=rc.ablation_T, dest="ablation_T")
     a.add_argument("--ablation-points", type=int, default=rc.ablation_points)
     _add_common_args(a)
     a.set_defaults(func=cmd_ablation)
 
-    w = sub.add_parser("sweep", help="experiment 3: one factor at a time")
-    w.add_argument("--factors", nargs="+", choices=list(SWEEP_LEVELS),
-                   default=list(SWEEP_LEVELS))
-    w.add_argument("--values", nargs="+", default=None,
-                   help="override the levels; only meaningful with one factor")
-    w.add_argument("--scenario", choices=list(SCENARIO_BY_NAME),
-                   default=Scenario.PARTIAL.value)
-    w.add_argument("--n-reps", type=int, default=rc.n_reps)
+    w = sub.add_parser("sweep", help="Tables 2 and 3")
+    w.add_argument("--du-reps", type=int, default=PAPER["du_reps"])
+    w.add_argument("--du-levels", type=int, nargs="+", default=PAPER["du_levels"])
+    w.add_argument("--delta-reps", type=int, default=PAPER["delta_reps"])
+    w.add_argument("--delta-levels", type=float, nargs="+",
+                   default=PAPER["delta_levels"])
     _add_common_args(w)
     w.set_defaults(func=cmd_sweep)
-    return p
-
-
-def _parse(argv: Sequence[str], cmd: str) -> argparse.Namespace:
-    return _build_parser().parse_args([cmd, *argv])
+    return parser
 
 
 def main(argv: Sequence[str] = None) -> None:
@@ -251,7 +198,7 @@ def _selftest() -> None:
     import shutil
     import tempfile
 
-    for argv in (["-h"], ["benchmark", "-h"], ["ablation", "-h"]):
+    for argv in (["-h"], ["benchmark", "-h"], ["ablation", "-h"], ["sweep", "-h"]):
         try:
             main(argv)
         except SystemExit as e:
@@ -261,44 +208,28 @@ def _selftest() -> None:
 
     # parsing with no flags must reproduce the dataclass defaults exactly
     ic, rc = InstanceConfig(), RunConfig()
-    # CoLF's constructor defaults, read the same way rather than retyped
-    import inspect
-    from agents.colf import CoLFAgent
-    cd = {k: v.default for k, v in inspect.signature(CoLFAgent).parameters.items()}
-    for cmd in ("benchmark", "ablation"):
-        args = _parse([], cmd)
-        for field in ("delta", "T_max", "seed0", "n_reps"):
-            got = getattr(_run_config(args), field)
-            assert got == getattr(rc, field), (
-                f"{cmd}: CLI default for {field} ({got!r}) has drifted from "
-                f"RunConfig ({getattr(rc, field)!r})"
-            )
-        for cli, field in (("K", "K"), ("d", "d"), ("sigma", "sigma"),
-                           ("min_gap", "min_gap")):
-            got = getattr(args, cli)
-            assert got == getattr(ic, field), (
-                f"{cmd}: CLI default for --{cli} ({got!r}) has drifted from "
-                f"InstanceConfig ({getattr(ic, field)!r})"
+    for cmd in ("benchmark", "ablation", "sweep"):
+        args = _build_parser().parse_args([cmd])
+        for cli, ref, field in (("K", ic, "K"), ("d", ic, "d"), ("sigma", ic, "sigma"),
+                                ("min_gap", ic, "min_gap"), ("delta", rc, "delta"),
+                                ("t_max", rc, "T_max"), ("seed0", rc, "seed0")):
+            assert getattr(args, cli) == getattr(ref, field), (
+                f"{cmd}: CLI default for --{cli} has drifted from the config"
             )
 
-    out_dir = tempfile.mkdtemp(prefix="colf_run_selftest_")
+    small = ["--K", "10", "--d", "4", "--t-max", "20000", "--min-gap", "0.15"]
+    out = tempfile.mkdtemp(prefix="colf_run_selftest_")
     try:
-        main([
-            "benchmark", "--K", "10", "--d", "4", "--n-reps", "4", "--t-max", "10000",
-            "--min-gap", "0.15", "--sigma", "0.1", "--out-dir", out_dir,
-        ])
-        assert (Path(out_dir) / "benchmark.csv").exists()
-        assert (Path(out_dir) / "benchmark.png").exists()
-
-        main([
-            "ablation", "--K", "10", "--d", "4", "--ablation-scenario", "S2",
-            "--min-gap", "0.10", "--sigma", "0.1", "--out-dir", out_dir,
-            "--n-reps", "4", "--ablation-T", "4000", "--ablation-points", "15",
-        ])
-        assert (Path(out_dir) / "ablation.csv").exists()
-        assert (Path(out_dir) / "ablation.png").exists()
+        main(["benchmark", "--n-reps", "3", "--out-dir", out, *small])
+        main(["ablation", "--figure-reps", "2", "--table-reps", "2", "--ablation-T", "2000",
+              "--ablation-points", "10", "--out-dir", out, *small])
+        main(["sweep", "--du-reps", "2", "--du-levels", "0", "4", "--delta-reps", "2",
+              "--delta-levels", "0.1", "0.01", "--out-dir", out, *small])
+        written = sorted(p.name for p in Path(out).iterdir())
+        assert written == ["ablation.png", "benchmark.png", "table1_benchmark.csv",
+                           "table2_du.csv", "table3_delta.csv", "table_ablation.csv"], written
     finally:
-        shutil.rmtree(out_dir, ignore_errors=True)
+        shutil.rmtree(out, ignore_errors=True)
 
     print("run.py self-test passed")
 

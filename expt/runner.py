@@ -7,9 +7,6 @@ Runner contract (agents/base.py):
         agent.update(a, instance.pull(a))
         if agent.t >= T_max: agent._stop(CENSORED); break
     psi = agent.recommend()
-
-`on_step(agent, instance)` fires once per pull; ablation.py uses it to record
-checkpoints, benchmark.py can leave it unset.
 """
 
 from __future__ import annotations
@@ -17,7 +14,7 @@ from __future__ import annotations
 import os
 import sys
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Optional
 
 import numpy as np
 
@@ -37,9 +34,6 @@ class RunResult:
     censored: bool
     reason: str
     n_pulls: np.ndarray
-    predicted_means: np.ndarray
-    components: dict
-    trace: dict
 
 
 def run_single(
@@ -47,7 +41,6 @@ def run_single(
     agent: Agent,
     run_cfg: RunConfig,
     noise_seed: Optional[int] = None,
-    on_step: Optional[Callable[[Agent, Instance], None]] = None,
 ) -> RunResult:
     """Run `agent` to completion on `instance` and score the recommendation.
 
@@ -61,8 +54,6 @@ def run_single(
         if a is None:
             break
         agent.update(a, instance.pull(a))
-        if on_step is not None:
-            on_step(agent, instance)
         if not agent.stopped and agent.t >= run_cfg.T_max:
             agent._stop(StopReason.CENSORED)
             break
@@ -76,9 +67,6 @@ def run_single(
         censored=agent.reason is StopReason.CENSORED,
         reason=agent.reason.value,
         n_pulls=agent.n_pulls,
-        predicted_means=agent.predicted_means(),
-        components=agent.components(),
-        trace=agent.trace(),
     )
 
 
@@ -139,14 +127,8 @@ def _selftest() -> None:
     # noise pairing: same seed, same deterministic policy -> bit-identical outcome
     agent3 = _RoundRobinAgent(inst.observed(), delta=0.05, sigma=0.1, rng=rng, horizon=30)
     res3 = run_single(inst, agent3, run_cfg, noise_seed=42)
-    assert np.allclose(res.predicted_means, res3.predicted_means)
+    assert res.psi == res3.psi and res.T_delta == res3.T_delta
     assert np.array_equal(res.n_pulls, res3.n_pulls)
-
-    # on_step fires exactly once per pull
-    counter = {"n": 0}
-    agent4 = _RoundRobinAgent(inst.observed(), delta=0.05, sigma=0.1, rng=rng, horizon=17)
-    res4 = run_single(inst, agent4, run_cfg, noise_seed=7, on_step=lambda ag, ins: counter.__setitem__("n", counter["n"] + 1))
-    assert counter["n"] == res4.T_delta == 17
 
     print("expt/runner.py self-test passed")
 
